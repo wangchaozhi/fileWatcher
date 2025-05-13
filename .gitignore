@@ -1,5 +1,6 @@
 # Logs
-
+fileWatcher
+fileWatcher.exe
 logs
 *.log
 npm-debug.log*
