@@ -50,7 +50,7 @@ func main() {
 			}
 			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0 {
 				now := time.Now()
-				if now.Sub(lastConfigChange) < 2*time.Second {
+				if now.Sub(lastConfigChange) < 10*time.Second {
 					// 忽略短时间内的重复事件
 					continue
 				}
@@ -60,6 +60,25 @@ func main() {
 				// 停止当前监听器
 				close(stopChan)
 				watcherRunning.Wait()
+
+				// ✅ 等待配置文件稳定
+				if isFileStable(configPath, 1*time.Second, 3) {
+					log.Println("配置文件稳定，继续")
+					//continue
+				} else {
+					time.Sleep(2 * time.Second)
+					if isFileStable(configPath, 1*time.Second, 3) {
+						fmt.Println("✅ 配置文件稳定")
+					} else {
+						fmt.Println("❌ 文件仍不稳定，退出")
+					}
+				}
+
+				// ✅ 尝试加载配置，提前失败就跳过
+				if _, err := loadWatchItems(configPath); err != nil {
+					log.Printf("读取配置失败: %v（等待下一次变更）", err)
+					continue
+				}
 
 				// 稍等后重启监听器
 				//time.Sleep(10 * time.Second)
@@ -187,7 +206,25 @@ func handleEvent(path, command string, processing *sync.Map) {
 			fmt.Println("✅ 延迟确认稳定，执行命令：", command)
 			runCommand(command)
 		} else {
-			fmt.Println("❌ 文件仍不稳定，跳过：", path)
+			fmt.Println("❌ 文件仍不稳定，5次重试中：", path)
+			const maxRetries = 5
+			retry := 0
+			for {
+				if isFileStable(path, 1*time.Second, 3) {
+					fmt.Println("✅ 文件最终稳定，执行命令：", command)
+					runCommand(command)
+					break
+				} else {
+					retry++
+					if retry >= maxRetries {
+						fmt.Println("❌ 多次检测文件不稳定，放弃执行：", path)
+						break
+					}
+					fmt.Println("🔁 文件仍不稳定，等待后重试：", path)
+					time.Sleep(2 * time.Second)
+				}
+			}
+
 		}
 	}
 }
