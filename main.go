@@ -20,6 +20,63 @@ type WatchItem struct {
 }
 
 func main() {
+	var stopChan chan struct{}
+	var watcherRunning sync.WaitGroup
+	var lastConfigChange time.Time
+
+	configPath := "fileWatcher.json"
+	absConfigPath, _ := filepath.Abs(configPath)
+
+	// 启动初始监听
+	stopChan = make(chan struct{})
+	watcherRunning.Add(1)
+	go func() {
+		defer watcherRunning.Done()
+		startFileWatcher(stopChan)
+	}()
+
+	// 监听配置文件变化
+	configWatcher, _ := fsnotify.NewWatcher()
+	defer configWatcher.Close()
+	_ = configWatcher.Add(filepath.Dir(absConfigPath))
+	fmt.Println("配置文件监听中:", absConfigPath)
+
+	for {
+		select {
+		case event := <-configWatcher.Events:
+			changedPath, _ := filepath.Abs(event.Name)
+			if changedPath != absConfigPath {
+				continue
+			}
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) != 0 {
+				now := time.Now()
+				if now.Sub(lastConfigChange) < 2*time.Second {
+					// 忽略短时间内的重复事件
+					continue
+				}
+				lastConfigChange = now
+				fmt.Println("📝 检测到配置文件更新，准备重启文件监听器...")
+
+				// 停止当前监听器
+				close(stopChan)
+				watcherRunning.Wait()
+
+				// 稍等后重启监听器
+				//time.Sleep(10 * time.Second)
+				stopChan = make(chan struct{})
+				watcherRunning.Add(1)
+				go func() {
+					defer watcherRunning.Done()
+					startFileWatcher(stopChan)
+				}()
+			}
+		case err := <-configWatcher.Errors:
+			fmt.Println("配置文件监听错误:", err)
+		}
+	}
+}
+
+func startFileWatcher(stopChan chan struct{}) {
 	// 读取配置
 	items, err := loadWatchItems("fileWatcher.json")
 	if err != nil {
@@ -92,11 +149,18 @@ func main() {
 					return
 				}
 				log.Println("监听错误:", err)
+			case <-stopChan: // 如果收到停止信号，退出监听
+				log.Println("文件监听已停止")
+				return
 			}
 		}
 	}()
 
-	<-make(chan struct{}) // 阻塞主线程
+	// 阻塞主线程，直到接收到停止信号
+	<-stopChan
+
+	// 可以选择在此处执行清理操作
+	log.Println("程序退出")
 }
 
 func loadWatchItems(path string) ([]WatchItem, error) {
@@ -118,6 +182,7 @@ func handleEvent(path, command string, processing *sync.Map) {
 		runCommand(command)
 	} else {
 		fmt.Println("⚠️ 文件未稳定，延迟重试：", path)
+		time.Sleep(5 * time.Second)
 		if isFileStable(path, 1*time.Second, 3) {
 			fmt.Println("✅ 延迟确认稳定，执行命令：", command)
 			runCommand(command)

@@ -1,10 +1,6 @@
 [
     {
-        "file": "A/kzwl-cps2-1.0-RELEASE.jar",
-        "command": "dir"
-    },
-    {
-        "file": "A/a.jar",
+        "file": "test/kzwl-winxin-1.0-RELEASE.jar",
         "command": "ls"
     }
 ]
